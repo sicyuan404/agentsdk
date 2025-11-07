@@ -87,12 +87,12 @@ func (t *FsReadTool) Execute(ctx context.Context, input map[string]interface{}, 
 	}
 	if startLine >= totalLines {
 		return map[string]interface{}{
-			"ok":        true,
-			"path":      path,
-			"content":   "",
-			"offset":    offset,
-			"limit":     limit,
-			"truncated": false,
+			"ok":         true,
+			"path":       path,
+			"content":    "",
+			"offset":     offset,
+			"limit":      limit,
+			"truncated":  false,
 			"totalLines": totalLines,
 		}, nil
 	}
@@ -124,32 +124,16 @@ func (t *FsReadTool) Execute(ctx context.Context, input map[string]interface{}, 
 }
 
 func (t *FsReadTool) Prompt() string {
-	return `## fs_read - 读取文件内容
+	return `Use this tool to inspect files within the sandboxed workspace.
 
-**用途**: 从沙箱文件系统读取文件内容
+Usage guidance:
+- Always pass paths relative to the sandbox working directory.
+- You may optionally provide "offset" and "limit" to control the slice of lines to inspect.
+- Large files will be truncated to keep responses compact; request additional ranges if needed.
+- Prefer batching adjacent reads in a single turn to minimize context churn.
 
-**参数**:
-- path (必填): 文件路径
-- offset (可选): 起始行号,默认0
-- limit (可选): 读取行数,默认读取全部
-
-**返回**:
-- ok: 是否成功
-- content: 文件内容
-- truncated: 是否被截断
-- totalLines: 总行数
-
-**示例**:
-` + "```json\n" + `{
-  "path": "src/main.go",
-  "offset": 0,
-  "limit": 100
-}
-` + "```\n" + `
-
-**注意事项**:
-- 路径必须在沙箱工作目录内
-- 大文件建议使用offset和limit分批读取
-- 读取后内容会被记录到FilePool中
-`
+Safety/Limitations:
+- This tool is read-only and integrates with FilePool for conflict detection.
+- File modifications are tracked to warn about stale reads.
+- Paths must stay inside the sandbox root directory.`
 }

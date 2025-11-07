@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/wordflowlab/agentsdk/pkg/provider"
@@ -69,13 +71,39 @@ func (a *Agent) runModelStep(ctx context.Context) error {
 			InputSchema: tool.InputSchema(),
 		})
 	}
+	toolNames := make([]string, len(toolSchemas))
+	for i, ts := range toolSchemas {
+		toolNames[i] = ts.Name
+	}
+	log.Printf("[runModelStep] Agent %s: Prepared %d tool schemas: %v", a.id, len(toolSchemas), toolNames)
 
 	// 调用模型
+	// 确保系统提示词包含工具手册（如果还没有注入）
+	a.mu.RLock()
+	hasManual := strings.Contains(a.template.SystemPrompt, "### Tools Manual")
+	toolMapSize := len(a.toolMap)
+	currentSystemPrompt := a.template.SystemPrompt
+	a.mu.RUnlock()
+
+	if !hasManual && toolMapSize > 0 {
+		log.Printf("[runModelStep] Agent %s: Manual not found, injecting... (toolMap size: %d)", a.id, toolMapSize)
+		a.injectToolManual()
+		a.mu.RLock()
+		currentSystemPrompt = a.template.SystemPrompt
+		hasManual = strings.Contains(currentSystemPrompt, "### Tools Manual")
+		a.mu.RUnlock()
+		log.Printf("[runModelStep] Agent %s: After injection, system prompt length: %d, contains manual: %v", a.id, len(currentSystemPrompt), hasManual)
+	} else if toolMapSize == 0 {
+		log.Printf("[runModelStep] Agent %s: No tools in toolMap, cannot inject manual", a.id)
+	}
+
 	streamOpts := &provider.StreamOptions{
 		Tools:     toolSchemas,
 		MaxTokens: 4096,
-		System:    a.template.SystemPrompt,
+		System:    currentSystemPrompt,
 	}
+
+	log.Printf("[runModelStep] Agent %s: Final system prompt length: %d, contains manual: %v", a.id, len(currentSystemPrompt), strings.Contains(currentSystemPrompt, "### Tools Manual"))
 
 	stream, err := a.provider.Stream(ctx, a.messages, streamOpts)
 	if err != nil {
@@ -106,15 +134,32 @@ func (a *Agent) runModelStep(ctx context.Context) error {
 					assistantContent[currentBlockIndex] = &types.TextBlock{Text: ""}
 					textBuffers[currentBlockIndex] = ""
 				} else if blockType == "tool_use" {
+					log.Printf("[runModelStep] Agent %s: Received tool_use block! ID: %v, Name: %v", a.id, delta["id"], delta["name"])
 					// 初始化工具调用块
 					for len(assistantContent) <= currentBlockIndex {
 						assistantContent = append(assistantContent, nil)
 					}
+
+					// 处理不同的工具调用格式（Anthropic vs OpenAI兼容格式）
+					toolID := ""
+					toolName := ""
+					if id, ok := delta["id"].(string); ok {
+						toolID = id
+					} else if id, ok := delta["id"].(float64); ok {
+						toolID = fmt.Sprintf("%.0f", id)
+					}
+
+					if name, ok := delta["name"].(string); ok {
+						toolName = name
+					}
+
 					assistantContent[currentBlockIndex] = &types.ToolUseBlock{
-						ID:    delta["id"].(string),
-						Name:  delta["name"].(string),
+						ID:    toolID,
+						Name:  toolName,
 						Input: make(map[string]interface{}),
 					}
+				} else {
+					log.Printf("[runModelStep] Agent %s: Unknown block type: %s", a.id, blockType)
 				}
 			}
 
@@ -123,10 +168,26 @@ func (a *Agent) runModelStep(ctx context.Context) error {
 				deltaType, _ := delta["type"].(string)
 				if deltaType == "text_delta" {
 					text, _ := delta["text"].(string)
-					// 累积文本
-					textBuffers[currentBlockIndex] += text
-					if block, ok := assistantContent[currentBlockIndex].(*types.TextBlock); ok {
-						block.Text = textBuffers[currentBlockIndex]
+					// 确保 currentBlockIndex 有效
+					if currentBlockIndex >= 0 {
+						// 确保数组足够大
+						for len(assistantContent) <= currentBlockIndex {
+							assistantContent = append(assistantContent, nil)
+						}
+						// 如果当前块不存在，创建文本块
+						if assistantContent[currentBlockIndex] == nil {
+							assistantContent[currentBlockIndex] = &types.TextBlock{Text: ""}
+							textBuffers[currentBlockIndex] = ""
+						}
+						// 确保 textBuffers 中有当前索引
+						if _, exists := textBuffers[currentBlockIndex]; !exists {
+							textBuffers[currentBlockIndex] = ""
+						}
+						// 累积文本
+						textBuffers[currentBlockIndex] += text
+						if block, ok := assistantContent[currentBlockIndex].(*types.TextBlock); ok {
+							block.Text = textBuffers[currentBlockIndex]
+						}
 					}
 					// 发送文本增量事件
 					a.eventBus.EmitProgress(&types.ProgressTextChunkEvent{
@@ -135,29 +196,61 @@ func (a *Agent) runModelStep(ctx context.Context) error {
 					})
 				} else if deltaType == "input_json_delta" {
 					partialJSON, _ := delta["partial_json"].(string)
-					// 累积JSON字符串
-					inputJSONBuffers[currentBlockIndex] += partialJSON
+					// 确保 currentBlockIndex 有效
+					if currentBlockIndex >= 0 {
+						// 确保 inputJSONBuffers 中有当前索引
+						if _, exists := inputJSONBuffers[currentBlockIndex]; !exists {
+							inputJSONBuffers[currentBlockIndex] = ""
+						}
+						// 累积JSON字符串
+						inputJSONBuffers[currentBlockIndex] += partialJSON
+					}
+				} else if deltaType == "arguments" {
+					// OpenAI 兼容格式：arguments 字段
+					partialArgs, _ := delta["arguments"].(string)
+					// 使用 chunk.Index 而不是 currentBlockIndex
+					blockIndex := chunk.Index
+					if blockIndex < 0 {
+						blockIndex = currentBlockIndex
+					}
+					if blockIndex >= 0 {
+						// 确保 inputJSONBuffers 中有当前索引
+						if _, exists := inputJSONBuffers[blockIndex]; !exists {
+							inputJSONBuffers[blockIndex] = ""
+						}
+						inputJSONBuffers[blockIndex] += partialArgs
+					}
 				}
 			}
 
 		case "content_block_stop":
-			if block, ok := assistantContent[currentBlockIndex].(*types.TextBlock); ok {
-				// 发送文本结束事件
-				a.eventBus.EmitProgress(&types.ProgressTextChunkEndEvent{
-					Step: a.stepCount,
-					Text: block.Text,
-				})
-			} else if block, ok := assistantContent[currentBlockIndex].(*types.ToolUseBlock); ok {
-				// 解析完整的工具输入JSON
-				if jsonStr, exists := inputJSONBuffers[currentBlockIndex]; exists && jsonStr != "" {
-					var input map[string]interface{}
-					if err := json.Unmarshal([]byte(jsonStr), &input); err == nil {
-						block.Input = input
+			if currentBlockIndex >= 0 && currentBlockIndex < len(assistantContent) {
+				if block, ok := assistantContent[currentBlockIndex].(*types.TextBlock); ok {
+					// 发送文本结束事件
+					a.eventBus.EmitProgress(&types.ProgressTextChunkEndEvent{
+						Step: a.stepCount,
+						Text: block.Text,
+					})
+				} else if block, ok := assistantContent[currentBlockIndex].(*types.ToolUseBlock); ok {
+					// 解析完整的工具输入JSON
+					if jsonStr, exists := inputJSONBuffers[currentBlockIndex]; exists && jsonStr != "" {
+						var input map[string]interface{}
+						if err := json.Unmarshal([]byte(jsonStr), &input); err == nil {
+							block.Input = input
+							log.Printf("[runModelStep] Agent %s: Parsed tool input: %v", a.id, input)
+						} else {
+							// 如果解析失败，尝试作为字符串处理
+							log.Printf("[runModelStep] Agent %s: Failed to parse tool input JSON: %v, raw: %s", a.id, err, jsonStr)
+						}
+					} else {
+						log.Printf("[runModelStep] Agent %s: No input JSON buffer for tool block at index %d", a.id, currentBlockIndex)
 					}
 				}
 			}
 
 		case "message_delta":
+			// 检查 finish_reason 是否为 tool_calls
+			// 如果是，需要解析所有工具调用的输入
 			if chunk.Usage != nil {
 				// 发送Token使用事件
 				a.eventBus.EmitMonitor(&types.MonitorTokenUsageEvent{
@@ -165,6 +258,24 @@ func (a *Agent) runModelStep(ctx context.Context) error {
 					OutputTokens: chunk.Usage.OutputTokens,
 					TotalTokens:  chunk.Usage.InputTokens + chunk.Usage.OutputTokens,
 				})
+			}
+		}
+	}
+
+	// 流式响应结束后，解析所有累积的工具输入
+	// 如果流结束时没有收到 content_block_stop，需要在这里解析
+	if len(inputJSONBuffers) > 0 {
+		for i, block := range assistantContent {
+			if tu, ok := block.(*types.ToolUseBlock); ok {
+				if jsonStr, exists := inputJSONBuffers[i]; exists && jsonStr != "" {
+					var input map[string]interface{}
+					if err := json.Unmarshal([]byte(jsonStr), &input); err == nil {
+						tu.Input = input
+						log.Printf("[runModelStep] Agent %s: Parsed tool input after stream end: index=%d, input=%v", a.id, i, input)
+					} else {
+						log.Printf("[runModelStep] Agent %s: Failed to parse tool input JSON after stream end: %v, raw: %s", a.id, err, jsonStr)
+					}
+				}
 			}
 		}
 	}
@@ -190,9 +301,15 @@ func (a *Agent) runModelStep(ctx context.Context) error {
 		}
 	}
 
+	log.Printf("[runModelStep] Agent %s: Found %d tool uses in response", a.id, len(toolUses))
 	if len(toolUses) > 0 {
+		for _, tu := range toolUses {
+			log.Printf("[runModelStep] Agent %s: Tool use - Name: %s, ID: %s, Input: %v", a.id, tu.Name, tu.ID, tu.Input)
+		}
 		a.setBreakpoint(types.BreakpointToolPending)
 		return a.executeTools(ctx, toolUses)
+	} else {
+		log.Printf("[runModelStep] Agent %s: No tool uses found, only text response", a.id)
 	}
 
 	return nil

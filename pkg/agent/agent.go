@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +111,14 @@ func Create(ctx context.Context, config *types.AgentConfig, deps *Dependencies) 
 		// 使用模板的工具列表
 		if toolsVal, ok := template.Tools.([]string); ok {
 			toolNames = toolsVal
+		} else if toolsVal, ok := template.Tools.([]interface{}); ok {
+			// 支持 []interface{} 类型（从 JSON 解析后可能是这种类型）
+			toolNames = make([]string, 0, len(toolsVal))
+			for _, v := range toolsVal {
+				if str, ok := v.(string); ok {
+					toolNames = append(toolNames, str)
+				}
+			}
 		} else if template.Tools == "*" {
 			toolNames = deps.ToolRegistry.List()
 		}
@@ -120,10 +129,13 @@ func Create(ctx context.Context, config *types.AgentConfig, deps *Dependencies) 
 	for _, name := range toolNames {
 		tool, err := deps.ToolRegistry.Create(name, nil)
 		if err != nil {
+			log.Printf("[Agent Create] Failed to create tool %s: %v", name, err)
 			continue // 忽略未注册的工具
 		}
 		toolMap[name] = tool
+		log.Printf("[Agent Create] Tool loaded: %s, has prompt: %v", name, tool.Prompt() != "")
 	}
+	log.Printf("[Agent Create] Total tools loaded: %d (names: %v)", len(toolMap), toolNames)
 
 	// 初始化 Slash Commands & Skills（如果配置了）
 	var cmdExecutor *commands.Executor
@@ -182,6 +194,9 @@ func Create(ctx context.Context, config *types.AgentConfig, deps *Dependencies) 
 		stopCh:             make(chan struct{}),
 	}
 
+	// 注入工具手册到系统提示词（在初始化之前，因为 initialize 会保存信息）
+	agent.injectToolManual()
+
 	// 初始化
 	if err := agent.initialize(ctx); err != nil {
 		return nil, fmt.Errorf("initialize agent: %w", err)
@@ -205,6 +220,8 @@ func (a *Agent) initialize(ctx context.Context) error {
 		}
 	}
 
+	// 注意：工具手册已在 Agent 创建时注入，这里不再重复注入
+
 	// 保存Agent信息
 	info := types.AgentInfo{
 		AgentID:       a.id,
@@ -216,6 +233,51 @@ func (a *Agent) initialize(ctx context.Context) error {
 	}
 
 	return a.deps.Store.SaveInfo(ctx, a.id, info)
+}
+
+// injectToolManual 注入工具手册到系统提示词
+func (a *Agent) injectToolManual() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if len(a.toolMap) == 0 {
+		log.Printf("[injectToolManual] Agent %s: No tools in toolMap, skipping", a.id)
+		return
+	}
+
+	// 收集工具手册
+	var sections []string
+	for _, tool := range a.toolMap {
+		if prompt := tool.Prompt(); prompt != "" {
+			sections = append(sections, fmt.Sprintf("**%s**\n%s", tool.Name(), prompt))
+			log.Printf("[injectToolManual] Agent %s: Added manual for tool %s", a.id, tool.Name())
+		} else {
+			log.Printf("[injectToolManual] Agent %s: Tool %s has no prompt", a.id, tool.Name())
+		}
+	}
+
+	if len(sections) == 0 {
+		log.Printf("[injectToolManual] Agent %s: No tool prompts found, skipping", a.id)
+		return
+	}
+
+	// 构建工具手册部分 - 完全参考 Kode-agent-sdk 的格式
+	manualSection := fmt.Sprintf("\n\n### Tools Manual\n\nThe following tools are available for your use. Please read their usage guidance carefully:\n\n%s",
+		strings.Join(sections, "\n\n"))
+
+	// 检查系统提示词是否已包含工具手册
+	if strings.Contains(a.template.SystemPrompt, "### Tools Manual") {
+		// 移除旧的工具手册
+		parts := strings.Split(a.template.SystemPrompt, "### Tools Manual")
+		if len(parts) > 0 {
+			a.template.SystemPrompt = strings.TrimSpace(parts[0])
+		}
+	}
+
+	// 追加新的工具手册
+	oldLength := len(a.template.SystemPrompt)
+	a.template.SystemPrompt += manualSection
+	log.Printf("[injectToolManual] Agent %s: Injected manual, system prompt length: %d -> %d", a.id, oldLength, len(a.template.SystemPrompt))
 }
 
 // ID 返回AgentID

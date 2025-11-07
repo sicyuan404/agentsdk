@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -57,6 +58,21 @@ func (ap *AnthropicProvider) Stream(ctx context.Context, messages []types.Messag
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	// 记录请求内容（用于调试）
+	if tools, ok := reqBody["tools"].([]map[string]interface{}); ok && len(tools) > 0 {
+		log.Printf("[AnthropicProvider] Request body includes %d tools", len(tools))
+		for _, tool := range tools {
+			if name, ok := tool["name"].(string); ok {
+				if schema, ok := tool["input_schema"].(map[string]interface{}); ok {
+					log.Printf("[AnthropicProvider] Tool %s schema: %+v", name, schema)
+				}
+			}
+		}
+		// 记录完整的工具定义（用于调试）
+		toolsJSON, _ := json.MarshalIndent(reqBody["tools"], "", "  ")
+		log.Printf("[AnthropicProvider] Full tools definition:\n%s", string(toolsJSON))
+	}
+
 	// 创建HTTP请求
 	req, err := http.NewRequestWithContext(ctx, "POST", ap.baseURL+"/v1/messages", bytes.NewReader(jsonData))
 	if err != nil {
@@ -97,6 +113,7 @@ func (ap *AnthropicProvider) buildRequest(messages []types.Message, opts *Stream
 	}
 
 	if opts != nil {
+		// max_tokens 是必需的，必须设置
 		if opts.MaxTokens > 0 {
 			req["max_tokens"] = opts.MaxTokens
 		} else {
@@ -107,15 +124,63 @@ func (ap *AnthropicProvider) buildRequest(messages []types.Message, opts *Stream
 			req["temperature"] = opts.Temperature
 		}
 
+		// 当有工具时，确保 max_tokens 足够大
+		if len(opts.Tools) > 0 && opts.MaxTokens == 0 {
+			req["max_tokens"] = 4096
+		}
+
 		if opts.System != "" {
 			req["system"] = opts.System
+			// 记录系统提示词长度和关键内容（用于调试）
+			if len(opts.System) > 500 {
+				log.Printf("[AnthropicProvider] System prompt length: %d, preview: %s...", len(opts.System), opts.System[:200])
+				// 检查是否包含工具手册
+				if strings.Contains(opts.System, "### Tools Manual") {
+					// 提取工具手册部分
+					parts := strings.Split(opts.System, "### Tools Manual")
+					if len(parts) > 1 {
+						manualPreview := parts[1]
+						if len(manualPreview) > 300 {
+							manualPreview = manualPreview[:300] + "..."
+						}
+						log.Printf("[AnthropicProvider] Tools Manual found, preview: %s", manualPreview)
+					}
+				} else {
+					log.Printf("[AnthropicProvider] WARNING: Tools Manual NOT found in system prompt!")
+				}
+			} else {
+				log.Printf("[AnthropicProvider] System prompt: %s", opts.System)
+			}
 		} else if ap.systemPrompt != "" {
 			// 如果 opts 没有 system，使用存储的 systemPrompt
 			req["system"] = ap.systemPrompt
 		}
 
 		if len(opts.Tools) > 0 {
-			req["tools"] = opts.Tools
+			// 转换工具格式为 Anthropic API 格式
+			tools := make([]map[string]interface{}, 0, len(opts.Tools))
+			for _, tool := range opts.Tools {
+				toolMap := map[string]interface{}{
+					"name":         tool.Name,
+					"description":  tool.Description,
+					"input_schema": tool.InputSchema,
+				}
+				tools = append(tools, toolMap)
+			}
+			req["tools"] = tools
+			toolNames := make([]string, len(tools))
+			for i, t := range tools {
+				toolNames[i] = t["name"].(string)
+			}
+			log.Printf("[AnthropicProvider] Sending %d tools to API: %v", len(tools), toolNames)
+			// 记录每个工具的详细信息
+			for _, tool := range tools {
+				if name, ok := tool["name"].(string); ok {
+					if schema, ok := tool["input_schema"].(map[string]interface{}); ok {
+						log.Printf("[AnthropicProvider] Tool %s schema: %v", name, schema)
+					}
+				}
+			}
 		}
 	} else {
 		req["max_tokens"] = 4096
@@ -220,6 +285,17 @@ func (ap *AnthropicProvider) parseStreamEvent(event map[string]interface{}) *Str
 		}
 		if contentBlock, ok := event["content_block"].(map[string]interface{}); ok {
 			chunk.Delta = contentBlock
+			// 添加详细的调试日志
+			if blockType, ok := contentBlock["type"].(string); ok {
+				log.Printf("[AnthropicProvider] content_block_start: type=%s, index=%d", blockType, chunk.Index)
+				if blockType == "tool_use" {
+					log.Printf("[AnthropicProvider] ✅ Received tool_use block: id=%v, name=%v", contentBlock["id"], contentBlock["name"])
+				} else if blockType == "text" {
+					log.Printf("[AnthropicProvider] ⚠️ Received text block instead of tool_use")
+				}
+			} else {
+				log.Printf("[AnthropicProvider] ⚠️ content_block_start without type field: %v", contentBlock)
+			}
 		}
 
 	case "content_block_delta":

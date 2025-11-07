@@ -92,34 +92,15 @@ func (t *BashRunTool) Execute(ctx context.Context, input map[string]interface{},
 }
 
 func (t *BashRunTool) Prompt() string {
-	return `## bash_run - 执行Bash命令
+	return `Execute bash commands in the sandboxed workspace.
 
-**用途**: 在沙箱环境中执行shell命令
+Guidelines:
+- Commands run in the sandbox working directory.
+- You may provide "timeout_ms" to override the default 120s timeout.
+- The tool returns stdout, stderr, and exit code.
 
-**参数**:
-- cmd (必填): 要执行的命令
-- timeout_ms (可选): 超时时间(毫秒),默认120000
-
-**返回**:
-- ok: 是否成功(exit code = 0)
-- code: 退出码
-- output: 标准输出+标准错误
-
-**示例**:
-` + "```json\n" + `{
-  "cmd": "ls -la",
-  "timeout_ms": 5000
-}
-` + "```\n" + `
-
-**安全限制**:
-- 危险命令会被自动阻止(rm -rf /, curl|bash等)
-- 命令在沙箱工作目录内执行
-- 默认120秒超时
-
-**注意事项**:
-- 非零退出码表示命令失败
-- stdout和stderr会合并到output字段
-- 建议使用具体的命令而不是脚本
-`
+Safety/Limitations:
+- Dangerous commands are automatically blocked (rm -rf /, curl|bash, etc.).
+- Commands timeout after 120s by default.
+- Non-zero exit codes indicate command failure.`
 }

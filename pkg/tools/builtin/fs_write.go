@@ -74,30 +74,15 @@ func (t *FsWriteTool) Execute(ctx context.Context, input map[string]interface{},
 }
 
 func (t *FsWriteTool) Prompt() string {
-	return `## fs_write - 写入文件
+	return `Use this tool to create or overwrite files inside the sandbox.
 
-**用途**: 创建或覆盖文件内容
+Guidelines:
+- Paths must stay inside the sandbox root. The SDK will deny attempts to escape the workspace.
+- Provide the full target contents. The previous file body will be replaced.
+- Pair with fs_read when editing existing files so the FilePool can validate freshness.
+- The tool returns the number of bytes written for auditing purposes.
 
-**参数**:
-- path (必填): 文件路径
-- content (必填): 要写入的内容
-
-**返回**:
-- ok: 是否成功
-- path: 文件路径
-- bytes: 写入字节数
-
-**示例**:
-` + "```json\n" + `{
-  "path": "output.txt",
-  "content": "Hello World"
-}
-` + "```\n" + `
-
-**注意事项**:
-- 会覆盖已存在的文件
-- 自动创建不存在的父目录
-- 写入操作会被记录到FilePool中
-- 建议写入前先用fs_read检查文件是否存在
-`
+Safety/Limitations:
+- File freshness validation ensures you don't overwrite externally modified files.
+- Large file writes are allowed but may impact performance.`
 }
