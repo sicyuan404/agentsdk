@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -142,12 +143,20 @@ func Create(ctx context.Context, config *types.AgentConfig, deps *Dependencies) 
 	var skillInjector *skills.Injector
 
 	if config.SkillsPackage != nil {
+		// 确定 Skills 包的基础路径
+		basePath := config.SkillsPackage.Path
+		if basePath == "" {
+			basePath = "." // 默认为当前目录（相对于 sandbox workDir）
+		}
+
 		// 初始化命令执行器
 		commandsDir := config.SkillsPackage.CommandsDir
 		if commandsDir == "" {
 			commandsDir = "commands"
 		}
-		commandLoader := commands.NewLoader(commandsDir, sb.FS())
+		// 拼接完整路径：basePath/commandsDir
+		fullCommandsDir := filepath.Join(basePath, commandsDir)
+		commandLoader := commands.NewLoader(fullCommandsDir, sb.FS())
 		cmdExecutor = commands.NewExecutor(&commands.ExecutorConfig{
 			Loader:       commandLoader,
 			Sandbox:      sb,
@@ -160,7 +169,9 @@ func Create(ctx context.Context, config *types.AgentConfig, deps *Dependencies) 
 		if skillsDir == "" {
 			skillsDir = "skills"
 		}
-		skillLoader := skills.NewLoader(skillsDir, sb.FS())
+		// 拼接完整路径：basePath/skillsDir
+		fullSkillsDir := filepath.Join(basePath, skillsDir)
+		skillLoader := skills.NewLoader(fullSkillsDir, sb.FS())
 		skillInjector, err = skills.NewInjector(ctx, &skills.InjectorConfig{
 			Loader:        skillLoader,
 			EnabledSkills: config.SkillsPackage.EnabledSkills,
@@ -169,6 +180,11 @@ func Create(ctx context.Context, config *types.AgentConfig, deps *Dependencies) 
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create skill injector: %w", err)
+		}
+		// 记录成功加载的 Skills
+		if skillInjector != nil {
+			log.Printf("[Skills] Successfully created skill injector with %d enabled skills from path: %s",
+				len(config.SkillsPackage.EnabledSkills), basePath)
 		}
 	}
 
@@ -423,6 +439,7 @@ func (a *Agent) Close() error {
 // handleSlashCommand 处理 slash command
 func (a *Agent) handleSlashCommand(ctx context.Context, text string) error {
 	if a.commandExecutor == nil {
+		log.Printf("[Command] ERROR: Slash commands not enabled for agent %s", a.id)
 		return fmt.Errorf("slash commands not enabled")
 	}
 
@@ -435,11 +452,16 @@ func (a *Agent) handleSlashCommand(ctx context.Context, text string) error {
 		args["argument"] = strings.Join(parts[1:], " ")
 	}
 
+	log.Printf("[Command] Agent %s: Executing command /%s with args: %v", a.id, commandName, args)
+
 	// 执行命令并获取消息
 	message, err := a.commandExecutor.Execute(ctx, commandName, args)
 	if err != nil {
+		log.Printf("[Command] ERROR: Agent %s failed to execute /%s: %v", a.id, commandName, err)
 		return fmt.Errorf("execute command: %w", err)
 	}
+
+	log.Printf("[Command] Agent %s: Command /%s executed successfully, generated message length: %d", a.id, commandName, len(message))
 
 	// 将命令消息作为用户消息发送
 	userMessage := types.Message{
@@ -456,6 +478,8 @@ func (a *Agent) handleSlashCommand(ctx context.Context, text string) error {
 	if err := a.deps.Store.SaveMessages(ctx, a.id, a.messages); err != nil {
 		return fmt.Errorf("save messages: %w", err)
 	}
+
+	log.Printf("[Command] Agent %s: Command /%s processing started", a.id, commandName)
 
 	// 触发处理
 	go a.processMessages(ctx)

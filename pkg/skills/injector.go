@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/wordflowlab/agentsdk/pkg/provider"
@@ -56,16 +57,26 @@ func (i *Injector) EnhanceSystemPrompt(ctx context.Context, basePrompt string, s
 	// 获取应该激活的技能
 	activeSkills := i.getActiveSkills(skillContext)
 
+	log.Printf("[Skills] Checking activation for message: %q", skillContext.UserMessage)
+	log.Printf("[Skills] Found %d active skills", len(activeSkills))
+	for _, skill := range activeSkills {
+		log.Printf("[Skills] - Activated: %s (%s)", skill.Name, skill.Description)
+	}
+
 	if len(activeSkills) == 0 {
+		log.Printf("[Skills] No skills activated, returning base prompt")
 		return basePrompt
 	}
 
 	// 根据模型能力选择注入方式
 	if i.capabilities.SupportSystemPrompt {
-		return i.injectToSystemPrompt(basePrompt, activeSkills)
+		enhanced := i.injectToSystemPrompt(basePrompt, activeSkills)
+		log.Printf("[Skills] Enhanced system prompt length: %d -> %d", len(basePrompt), len(enhanced))
+		return enhanced
 	}
 
 	// 不支持 system prompt，返回原始提示词
+	log.Printf("[Skills] Provider doesn't support system prompt, returning base")
 	return basePrompt
 }
 
