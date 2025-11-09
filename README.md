@@ -8,9 +8,12 @@
 - **🔒 云端沙箱集成**: 原生支持阿里云AgentBay、火山引擎等云平台安全沙箱
 - **⚡ 高性能并发**: 基于Go goroutine的并发模型,支持100+并发Agent
 - **🔄 断点恢复**: 7段断点机制,会话中断后可无缝恢复
-- **🛠️ 丰富工具生态**: 内置文件系统、Bash、Todo工具,支持MCP协议扩展
+- **🛠️ 丰富工具生态**: 内置文件系统、Bash、Todo、HTTP请求、Web搜索,支持MCP协议扩展
 - **👥 多Agent协作**: AgentPool和Room机制实现Agent间消息路由与协作
 - **📊 可观测性**: 完整的事件审计、Token统计、工具执行追踪
+- **🧩 Middleware系统**: 洋葱模型架构,支持自动上下文总结、工具拦截、自定义中间件
+- **⚙️ Slash Commands**: 通用命令架构,支持自定义命令和技能注入
+- **🌐 多Provider支持**: Anthropic、OpenAI、DeepSeek、GLM等多种大模型提供商
 
 ## 快速开始
 
@@ -134,6 +137,32 @@ mcpManager.ConnectServer(ctx, "my-mcp-server")
 
 完整示例见 [examples/mcp](./examples/mcp)
 
+### Middleware 系统
+
+```go
+import "github.com/wordflowlab/agentsdk/pkg/types"
+
+// 启用 Summarization Middleware - 自动总结长对话
+ag, err := agent.Create(context.Background(), &types.AgentConfig{
+    TemplateID: "assistant",
+    ModelConfig: &types.ModelConfig{
+        Provider: "anthropic",
+        Model:    "claude-sonnet-4-5",
+        APIKey:   os.Getenv("ANTHROPIC_API_KEY"),
+    },
+    // 启用中间件
+    Middlewares: []string{"summarization"},  // 当上下文超过 170k tokens 时自动总结
+}, deps)
+
+// 中间件会自动:
+// 1. 监控消息历史的 token 数
+// 2. 超过阈值时自动总结旧消息
+// 3. 保留最近 6 条消息 + 总结
+// 4. 拦截模型调用和工具执行 (洋葱模型)
+```
+
+详细文档见 [ARCHITECTURE.md](./ARCHITECTURE.md) 和 [docs/PHASE6C_MIDDLEWARE_INTEGRATION.md](./docs/PHASE6C_MIDDLEWARE_INTEGRATION.md)
+
 ## 架构设计
 
 ```
@@ -229,9 +258,20 @@ mcpManager.ConnectServer(ctx, "my-mcp-server")
 - [x] MCP 工具适配器
 - [x] 完整示例和文档
 
-**当前代码量**: ~9,500+ LOC
-**测试覆盖**: Agent 核心功能 + 云平台集成 + Pool/Room/Scheduler/Permission + MCP 集成
-**可运行状态**: ✅ 可在本地/阿里云/火山引擎运行 Agent,支持多 Agent 协作、任务调度、权限控制和 MCP 工具集成
+### Phase 6 - 高级功能 ✅
+
+- [x] **Phase 6A**: Slash Commands 支持 (通用 Commands 架构)
+- [x] **Phase 6B**: Skills 注入系统 (LLM Provider 能力查询)
+- [x] **Phase 6B-1**: 网络工具 (HTTP 请求 + Web 搜索)
+- [x] **Phase 6C**: Middleware 集成 (洋葱模型 + Summarization)
+- [x] 多 Provider 支持 (Anthropic/OpenAI/DeepSeek/GLM)
+- [x] 中间件注册表和栈管理
+- [x] 自动上下文总结 (>170k tokens)
+- [ ] Prompt Caching 优化
+
+**当前代码量**: ~12,000+ LOC
+**测试覆盖**: Agent 核心功能 + 云平台集成 + 多 Agent 协作 + MCP 集成 + Middleware 系统
+**可运行状态**: ✅ 可在本地/阿里云/火山引擎运行 Agent,支持多 Agent 协作、任务调度、权限控制、MCP 工具集成、Slash Commands、Skills 注入和中间件系统
 
 ## License
 
