@@ -28,6 +28,19 @@ async function renderDiagram() {
   if (el.value.querySelector('svg')) return
 
   try {
+    // 移除注释节点
+    for (const child of Array.from(el.value.childNodes)) {
+      if (child.nodeType === Node.COMMENT_NODE) {
+        el.value.removeChild(child)
+      }
+    }
+
+    // 提取纯文本内容（避免HTML标签干扰）
+    const code = el.value.textContent?.trim()
+    if (!code) {
+      throw new Error('No diagram code found')
+    }
+
     // 动态导入 mermaid
     if (!mermaid) {
       const module = await import('mermaid')
@@ -58,15 +71,12 @@ async function renderDiagram() {
       }
     })
 
-    // 移除注释节点
-    for (const child of Array.from(el.value.childNodes)) {
-      if (child.nodeType === Node.COMMENT_NODE) {
-        el.value.removeChild(child)
-      }
-    }
+    // 使用render方法渲染图表
+    const id = `mermaid-${Date.now()}`
+    const { svg } = await mermaid.render(id, code)
 
-    // 渲染图表
-    await mermaid.run({ nodes: [el.value] })
+    // 清空元素并插入SVG
+    el.value.innerHTML = svg
     rendered.value = true
   } catch (e: any) {
     console.error('Mermaid rendering error:', e)
