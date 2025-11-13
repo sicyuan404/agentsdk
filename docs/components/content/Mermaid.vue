@@ -5,15 +5,17 @@
         加载图表中...
       </div>
     </div>
-    <pre ref="el" class="mermaid" :style="{ display: rendered ? 'flex' : 'none', justifyContent: 'center' }">
-      <slot />
-    </pre>
+    <div ref="el" class="mermaid" :style="{ display: rendered ? 'flex' : 'none', justifyContent: 'center' }" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useColorMode } from '#imports'
+
+const props = defineProps<{
+  code?: string
+}>()
 
 const el = ref<HTMLElement | null>(null)
 const rendered = ref(false)
@@ -28,23 +30,13 @@ async function renderDiagram() {
   if (el.value.querySelector('svg')) return
 
   try {
-    // 移除注释节点和空白文本节点
-    for (const child of Array.from(el.value.childNodes)) {
-      if (child.nodeType === Node.COMMENT_NODE ||
-          (child.nodeType === Node.TEXT_NODE && !child.textContent?.trim())) {
-        el.value.removeChild(child)
-      }
-    }
-
-    // 使用innerText保留换行符（textContent会丢失换行符）
-    let code = el.value.innerText?.trim()
+    // 从props或slot获取代码
+    let code = props.code
     if (!code) {
-      throw new Error('No diagram code found')
+      throw new Error('No diagram code provided')
     }
 
-    // 清理可能的HTML实体
-    code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-
+    code = code.trim()
     console.log('Mermaid code:', code.substring(0, 200))
 
     // 动态导入 mermaid
@@ -105,6 +97,14 @@ watch(() => colorMode.value, async () => {
     }
   }
 })
+
+// 监听code prop变化
+watch(() => props.code, () => {
+  if (rendered.value) {
+    rendered.value = false
+  }
+  renderDiagram()
+}, { immediate: false })
 
 onMounted(() => {
   renderDiagram()
