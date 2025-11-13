@@ -2,13 +2,15 @@
 
 > **企业级AI Agent运行时**: 事件驱动、云端沙箱、安全可控 —— 为生产环境设计的Go Agent SDK
 
+📖 **[完整文档](https://wordflowlab.github.io/agentsdk/)** | 🚀 **[快速开始](https://wordflowlab.github.io/agentsdk/introduction/quickstart)** | 🏗️ **[架构设计](https://wordflowlab.github.io/agentsdk/introduction/architecture)**
+
 ## 架构设计
 
-![AgentSDK 系统架构](docs/images/architecture-overview.svg)
+![AgentSDK 系统架构](docs/prd/images/architecture-overview.svg)
 
 ### Middleware 洋葱模型
 
-![Middleware 洋葱模型](docs/images/middleware-onion.svg)
+![Middleware 洋葱模型](docs/prd/images/middleware-onion.svg)
 
 AgentSDK 采用洋葱模型的 Middleware 架构，每个请求和响应都会依次通过多层中间件。优先级数值越大的中间件位于越外层，越早处理请求，越晚处理响应。这种设计使得功能可以清晰地分层，便于扩展和维护。
 
