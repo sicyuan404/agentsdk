@@ -1,13 +1,6 @@
 <template>
   <div class="mermaid-wrapper my-6">
-    <pre
-      ref="mermaidRef"
-      :class="['mermaid', 'not-prose']"
-      :style="{ display: isRendered ? 'flex' : 'none', justifyContent: 'center' }"
-    >
-      <slot />
-    </pre>
-    <div v-if="!isRendered" class="flex justify-center items-center py-8">
+    <div v-if="!isRendered && !hasError" class="flex justify-center items-center py-8">
       <div class="animate-pulse text-gray-500 dark:text-gray-400">
         加载图表中...
       </div>
@@ -17,25 +10,40 @@
         图表渲染失败，请检查语法
       </div>
     </div>
+    <div v-show="isRendered" ref="containerRef" class="mermaid-container flex justify-center"></div>
+    <div style="display: none;">
+      <slot />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, useSlots } from 'vue'
 import { useColorMode } from '#imports'
 
-const mermaidRef = ref<HTMLElement | null>(null)
+const containerRef = ref<HTMLElement | null>(null)
 const isRendered = ref(false)
 const hasError = ref(false)
 const colorMode = useColorMode()
+const slots = useSlots()
 
 let mermaid: any = null
+let diagramId = 0
 
 async function renderDiagram() {
-  if (!mermaidRef.value) return
+  if (!containerRef.value) return
 
   try {
     hasError.value = false
+    isRendered.value = false
+
+    // 获取slot内容
+    const slotContent = slots.default?.()[0]
+    if (!slotContent || typeof slotContent.children !== 'string') {
+      throw new Error('No diagram content found')
+    }
+
+    const diagramText = slotContent.children.trim()
 
     // 动态导入 mermaid (避免 SSR 问题)
     if (!mermaid) {
@@ -67,10 +75,14 @@ async function renderDiagram() {
       }
     })
 
-    await mermaid.run({
-      nodes: [mermaidRef.value],
-      suppressErrors: false
-    })
+    // 清空容器
+    containerRef.value.innerHTML = ''
+
+    // 渲染图表
+    const id = `mermaid-${Date.now()}-${diagramId++}`
+    const { svg } = await mermaid.render(id, diagramText)
+    containerRef.value.innerHTML = svg
+
     isRendered.value = true
   } catch (e: any) {
     console.error('Mermaid rendering error:', e)
@@ -79,19 +91,17 @@ async function renderDiagram() {
 }
 
 // 监听主题变化，重新渲染
-watch(() => colorMode.value, async () => {
-  if (mermaidRef.value && isRendered.value) {
-    const svg = mermaidRef.value.querySelector('svg')
-    if (svg) {
-      svg.remove()
-      isRendered.value = false
-      await renderDiagram()
-    }
+watch(() => colorMode.value, () => {
+  if (isRendered.value) {
+    renderDiagram()
   }
 })
 
 onMounted(() => {
-  renderDiagram()
+  // 延迟一点确保DOM完全加载
+  setTimeout(() => {
+    renderDiagram()
+  }, 100)
 })
 </script>
 
