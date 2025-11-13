@@ -28,18 +28,24 @@ async function renderDiagram() {
   if (el.value.querySelector('svg')) return
 
   try {
-    // 移除注释节点
+    // 移除注释节点和空白文本节点
     for (const child of Array.from(el.value.childNodes)) {
-      if (child.nodeType === Node.COMMENT_NODE) {
+      if (child.nodeType === Node.COMMENT_NODE ||
+          (child.nodeType === Node.TEXT_NODE && !child.textContent?.trim())) {
         el.value.removeChild(child)
       }
     }
 
     // 提取纯文本内容（避免HTML标签干扰）
-    const code = el.value.textContent?.trim()
+    let code = el.value.textContent?.trim()
     if (!code) {
       throw new Error('No diagram code found')
     }
+
+    // 清理可能的HTML实体
+    code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+
+    console.log('Mermaid code:', code.substring(0, 200))
 
     // 动态导入 mermaid
     if (!mermaid) {
